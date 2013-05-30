@@ -1,0 +1,489 @@
+\documentclass[t]{beamer}
+\usepackage{alltt}
+\usepackage{verbatim}
+
+\newcommand{\bs}{\symbol{`\\}}
+\newcommand{\arr}{$\rightarrow$}
+\newcommand{\LAMT}[1]{/\bs{}{#1} \arr }
+\newcommand{\lam}[1]{\bs{}{#1} \arr }
+\newcommand{\oomph}[1]{\textcolor[rgb]{0.0,0.5,0.9}{#1}}
+\newcommand{\g}[1]{\textcolor[rgb]{0.7,0.3,0.3}{#1}}
+
+\begin{document}
+\title{SpecConstr: optimising purely functional loops}
+\author{Amos Robinson}
+
+\frame{\titlepage}
+
+\begin{frame}[fragile]{Motivation - dot product}
+The code we want to write
+\begin{alltt}\Large
+type V = Unboxed.Vector
+
+dotp :: V Int -> V Int -> Int
+dotp as bs
+  = fold    (+) 0
+  $ zipWith (*) as bs
+\end{alltt}
+\end{frame}
+
+\begin{frame}[fragile]{Motivation - dot product}
+The code we want to run
+\begin{alltt}\Large
+dotp as bs = go 0 0
+ where
+  go i acc
+   | i > V.length as
+   = acc
+   | otherwise
+   = go (i + 1) (acc + (as!i * bs!i))
+\end{alltt}
+No intermediate vectors, no constructors, no allocations: perfect.
+
+(Just pretend they're not boxed ints...)
+\end{frame}
+
+\begin{frame}[fragile]{Motivation - dot product}
+The code we get after stream fusion (trust me)
+\begin{alltt}\Large
+dotp as bs = go \oomph{(Nothing,} 0\oomph{)} 0
+ where
+  go (_, i) acc
+   | i > V.length as
+   = acc
+  go (Nothing, i) acc
+   = go (\oomph{Just} (as!i)\oomph{,} i\oomph{)} acc
+  go (Just a, i) acc
+   = go \oomph{(Nothing,} i + 1\oomph{)} (acc + (a * bs!i))
+\end{alltt}
+All those allocations!
+\end{frame}
+
+\begin{frame}[fragile]{Motivation - dot product}
+The code we get after stream fusion (trust me)
+\begin{alltt}\Large
+dotp as bs = go (Nothing, 0) 0
+ where
+  go \oomph{(}_\oomph{,} i\oomph{)} acc
+   | i > V.length as
+   = acc
+  go \oomph{(Nothing,} i\oomph{)} acc
+   = go (Just (as!i), i) acc
+  go \oomph{(Just} a\oomph{,} i\oomph{)} acc
+   = go (Nothing, i + 1) (acc + (a * bs!i))
+\end{alltt}
+Only to be unboxed and scrutinised immediately. What a waste.
+\end{frame}
+
+\begin{frame}[fragile]{Motivation - dot product}
+Let us try specialising this by hand.
+\begin{alltt}
+dotp as bs = \oomph{go (Nothing, 0) 0}
+ where
+
+
+
+
+
+
+  go (_, i) acc
+   | i > V.length as  = acc
+  go (Nothing, i) acc = go (Just (as!i), i) acc
+  go (Just a,  i) acc = go (Nothing, i+1) (acc + (a*bs!i))
+\end{alltt}
+Start by looking at the first recursive call.
+We can specialise the function for that particular call pattern.
+\end{frame}
+
+\begin{frame}[fragile]{Motivation - dot product}
+Let us try specialising this by hand.
+\begin{alltt}
+dotp as bs = \oomph{go'1 0 0}
+ where
+  \oomph{go'1 i acc = case i > V.length as of
+   True  -> acc
+   False -> go (Just (as!i), i) acc}
+
+
+
+  go (_, i) acc
+   | i > V.length as  = acc
+  go (Nothing, i) acc = go (Just (as!i), i) acc
+  go (Just a,  i) acc = \oomph{go'1 (i + 1) (acc + (a * bs!i))}
+\end{alltt}
+Specialise on \verb/go (Nothing, x) y = go'1 x y/
+\end{frame}
+
+\begin{frame}[fragile]{Motivation - dot product}
+Let us try specialising this by hand.
+\begin{alltt}
+dotp as bs = go'1 0 0
+ where
+  go'1 i acc = case i > V.length as of
+   True  -> acc
+   False -> \oomph{go (Just (as!i), i) acc}
+
+
+
+  go (_, i) acc
+   | i > V.length as  = acc
+  go (Nothing, i) acc = go (Just (as!i), i) acc
+  go (Just a,  i) acc = go'1 (i + 1) (acc + (a * bs!i))
+\end{alltt}
+Now look at the call in the new function. We can specialise on that pattern, too!
+\end{frame}
+
+\begin{frame}[fragile]{Motivation - dot product}
+Let us try specialising this by hand.
+\begin{alltt}
+dotp as bs = go'1 0 0
+ where
+  go'1 i acc = case i > V.length as of
+   True  -> acc
+   False -> \oomph{go'2 (as!i) i acc}
+  \oomph{go'2 a i acc = case i > V.length as of
+   True  -> acc
+   False -> go'1 (i + 1) (acc + (a * bs!i))}
+  go (_, i) acc
+   | i > V.length as  = acc
+  go (Nothing, i) acc = go (Just (as!i), i) acc
+  go (Just a,  i) acc = go'1 (i + 1) (acc + (a * bs!i))
+\end{alltt}
+Specialise on \verb/go (Just x, y) z = go'2 x y z/
+\end{frame}
+
+\begin{frame}[fragile]{Motivation - dot product}
+Let us try specialising this by hand.
+\begin{alltt}
+dotp as bs = go'1 0 0
+ where
+  go'1 i acc = case i > V.length as of
+   True  -> acc
+   False -> go'2 (as!i) i acc
+  go'2 a i acc = case i > V.length as of
+   True  -> acc
+   False -> go'1 (i + 1) (acc + (a * bs!i))
+  \oomph{go (_, i) acc
+   | i > V.length as  = acc
+  go (Nothing, i) acc = go (Just (as!i), i) acc
+  go (Just a,  i) acc = go'1 (i + 1) (acc + (a * bs!i))}
+\end{alltt}
+Now it turns out that \verb/go/ isn't even mentioned any more. Get rid of it.
+\end{frame}
+
+\begin{frame}[fragile]{Motivation - dot product}
+Let us try specialising this by hand.
+\begin{alltt}
+dotp as bs = go'1 0 0
+ where
+  go'1 i acc = case i > V.length as of
+   True  -> acc
+   False -> \oomph{go'2 (as!i) i acc}
+  go'2 a i acc = case i > V.length as of
+   True  -> acc
+   False -> \oomph{go'1 (i + 1) (acc + (a * bs!i))}
+
+
+
+
+\end{alltt}
+These two are mutually recursive, but we can still inline \verb/go'2/ into \verb/go'1/.
+\end{frame}
+
+\begin{frame}[fragile]{Motivation - dot product}
+Let us try specialising this by hand.
+\begin{alltt}
+dotp as bs = go'1 0 0
+ where
+  go'1 i acc = \oomph{case i > V.length as of}
+   True  -> acc
+   \oomph{False -> case i > V.length as of}
+      True  -> acc
+      \oomph{False ->} go'1 (i + 1) (acc + (as!i * bs!i))
+
+
+
+
+
+\end{alltt}
+The case of \verb/i > V.length as/ is already inside the False branch of a case of the same expression,
+we can remove the case altogether.
+\end{frame}
+
+\begin{frame}[fragile]{Motivation - dot product}
+Let us try specialising this by hand.
+\begin{alltt}
+dotp as bs = go'1 0 0
+ where
+  go'1 i acc = case i > V.length as of
+   True  -> acc
+   False -> \oomph{go'1 (i + 1) (acc + (as!i * bs!i))}
+
+
+
+
+
+
+
+\end{alltt}
+Which was what we wanted.
+\end{frame}
+
+
+
+
+
+\begin{frame}[fragile]{GHC pipeline (not to scale)}
+We now have some intuition about SpecConstr. How does it fit in with the rest of GHC's optimisations?
+
+\begin{tabular}{lllll}
+Parse      & :: & String & \arr & Source
+\\
+Typecheck  & :: & Source & \arr & Source
+\\
+Desugar     & :: & Source & \arr & Core
+\\
+Simplify    & :: & Core & \arr & Core
+\\
+SpecConstr & :: & Core & \arr & Core
+\\
+Simplify $\times$ 50 & :: & Core & \arr & Core
+\\
+Code generation & :: & Core & \arr & Object
+\end{tabular}
+\end{frame}
+
+\begin{frame}[fragile]{GHC pipeline (not to scale)}
+We now have some intuition about SpecConstr. How does it fit in with the rest of GHC's optimisations?
+
+\begin{tabular}{lllll}
+Parse     & :: & String & \arr & Source
+\\
+Typecheck  & :: & Source & \arr & Source
+\\
+Desugar     & :: & Source & \arr & Core
+\\
+\oomph{Simplify}    & :: & Core & \arr & Core
+\\
+\oomph{SpecConstr} & :: & Core & \arr & Core
+\\
+\oomph{Simplify $\times$ 50} & :: & Core & \arr & Core
+\\
+Code generation & :: & Core & \arr & Object
+\end{tabular}
+
+Focus on these parts.
+\end{frame}
+
+
+\begin{frame}[fragile]{Simplifier}
+The simplifier does a bunch of transforms in a single pass:
+\begin{itemize}
+\item Case of constructor
+\item Inlining
+\item Rewrite rules
+\item Let floating
+\item Beta reduction
+\end{itemize}
+and many more, but these are the most interesting for us
+\end{frame}
+
+\begin{frame}[fragile]{Simplifier}
+Case of constructor
+\begin{alltt}\Large
+case (\oomph{Just a}) of
+ Nothing -> x
+ \oomph{Just a'} -> \oomph{y}
+
+==>
+
+let \oomph{a'} = \oomph{a}
+in  \oomph{y}
+\end{alltt}
+When the scrutinee of a case is known to be a constructor, we can remove the case altogether.
+\end{frame}
+
+\begin{frame}[fragile]{Simplifier}
+Inlining
+\begin{alltt}\Large
+zipWith f xs ys
+ = unstream $ zipWith_S f
+   (stream xs) (stream ys)
+...
+zipWith (*) as bs
+
+==>
+...
+unstream $ zipWith_S (*)
+(stream as) (stream bs)
+\end{alltt}
+Move the definition of a function into places it is used
+\end{frame}
+
+\begin{frame}[fragile]{Simplifier}
+Rewrite rules
+\begin{alltt}\Large
+\{-# RULES \oomph{stream (unstream xs)} = xs #-\}
+
+fold_S (+) $ \oomph{stream $ unstream $}
+zipWith_S (*) (stream as) (stream bs)
+==>
+...
+fold_S (+) $
+zipWith_S (*) (stream as) (stream bs)
+\end{alltt}
+Replace left-hand side with right, anywhere
+\end{frame}
+
+\begin{frame}[fragile]{SpecConstr, actually}
+The basic idea:
+\begin{itemize}
+\item Find calls with constructors
+\item Create new functions for that call pattern
+\item Add rewrite rules for each call pattern
+\item Let the simplifier do the rest
+\end{itemize}
+
+\begin{alltt}
+enumFromTo f t acc
+ = case f > t of
+   True  -> acc
+   False -> \oomph{enumFromTo f (t-1) (t : acc)}
+\end{alltt}
+
+(Silly example.)
+
+\end{frame}
+
+\begin{frame}[fragile]{SpecConstr, actually}
+The basic idea:
+\begin{itemize}
+\item Find calls with constructors
+\item Create new functions for that call pattern
+\item Add rewrite rules for each call pattern
+\item Let the simplifier do the rest
+\end{itemize}
+
+\begin{alltt}
+enumFromTo f t acc
+ = case f > t of
+   True  -> acc
+   False -> enumFromTo'1 f (t-1) t acc
+\oomph{enumFromTo'1 f t cons acc
+ = case f > t of
+   True  -> acc
+   False -> enumFromTo f (t-1) (t : cons : acc)}
+\end{alltt}
+Not only will this diverge, it's not even decreasing allocations!
+\end{frame}
+
+\begin{frame}[fragile]{SpecConstr, actually}
+The basic idea:
+\begin{itemize}
+\item Find calls with constructors \oomph{on scrutinised parameters}
+\item Create new functions for that call pattern
+\item Add rewrite rules for each call pattern
+\item Let the simplifier do the rest
+\end{itemize}
+
+\begin{alltt}
+enumFromTo f t acc
+ = case f > t of
+   True  -> acc
+   False -> enumFromTo f (t-1) (t : acc)
+\end{alltt}
+
+\end{frame}
+
+\begin{frame}[fragile]{SpecConstr, actually}
+Looking through bindings
+
+\begin{alltt}
+silly2 xs' = case xs' of
+ []     -> []
+ (x:xs) -> if   x > 10
+           then (do1 \oomph{(x:xs)}, do2 \oomph{(x:xs)}) : silly2 \oomph{(x:xs)}
+           else silly2 xs
+\end{alltt}
+
+Common subexpression elimination (CSE) will probably rewrite those \verb/x:xs/ into \verb/xs'/.
+\end{frame}
+
+\begin{frame}[fragile]{SpecConstr, actually}
+Looking through bindings
+
+\begin{alltt}
+silly2 xs' = case xs' of
+ []     -> []
+ (x:xs) -> if   x > 10
+           then (do1 \oomph{   xs'}, do2 \oomph{   xs'}) : silly2 \oomph{   xs'}
+           else silly2 xs
+\end{alltt}
+
+But now it's not obvious that \verb/silly2 xs'/ is a valid call pattern.
+No matter: keep track of the bound variables and their values. If we know \verb/xs'=x:xs/, we can still specialise.
+\end{frame}
+
+\begin{frame}[fragile]{SpecConstr, actually}
+Reboxing
+
+\begin{alltt}
+silly2 xs' = case xs' of
+ []     -> []
+ (x:xs) -> if   x > 10
+           then (do1    xs', do2    xs') : \oomph{silly2    xs'}
+           else silly2 xs
+\end{alltt}
+
+Now we'll specialise on \verb/silly2 (x:xs) = silly2'1 x xs/.
+\end{frame}
+
+\begin{frame}[fragile]{SpecConstr, actually}
+Reboxing
+
+\begin{alltt}
+silly2 xs' = case xs' of
+ []     -> []
+ (x:xs) -> if   x > 10
+           then (do1    xs', do2    xs') : silly2    xs'
+           else silly2 xs
+silly2'1 x xs
+ =         if   x > 10
+           then (do1 \oomph{(x:xs)}, do2 \oomph{(x:xs)}) : \oomph{silly2'1 x xs}
+           else silly2 xs
+\end{alltt}
+
+Hey! Now we're actually doing \emph{more} allocations.
+
+The moral: don't specialise on a bound variable if the variable is used elsewhere. 
+\end{frame}
+
+
+\begin{frame}[fragile]{ForceSpecConstr}
+SpecConstr puts a limit on the number of specialisations,
+to prevent code blowup.
+\begin{alltt}
+unstream :: Stream a -> [a]
+unstream (Stream f s) = go \oomph{ForceSpecConstr} s
+ where
+  go \oomph{ForceSpecConstr} s
+   = case f s of
+     Done       -> []
+     Skip    s' ->     go \oomph{ForceSpecConstr} s'
+     Yield a s' -> a : go \oomph{ForceSpecConstr} s'
+\end{alltt}
+
+But with stream fusion, we want to specialise everything no matter what.
+Damn the consequences!
+\end{frame}
+
+
+
+
+\begin{frame}[fragile]{End}
+end.
+\end{frame}
+
+
+
+\end{document}
