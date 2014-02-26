@@ -1,0 +1,95 @@
+\documentclass[t]{beamer}
+\usepackage{alltt}
+\usepackage{verbatim}
+
+\newcommand{\bs}{\symbol{`\\}}
+\newcommand{\arr}{$\rightarrow$}
+\newcommand{\LAMT}[1]{/\bs{}{#1} \arr }
+\newcommand{\lam}[1]{\bs{}{#1} \arr }
+%\newcommand{\b}[1]{\textcolor[rgb]{0.0,0.5,0.9}{#1}}
+\newcommand{\g}[1]{\textcolor[rgb]{0.7,0.3,0.3}{#1}}
+
+\begin{document}
+\title{Fixing flattening's space complexity flaws with flow fusion}
+\author{Amos Robinson}
+
+\frame{\titlepage}
+
+\begin{frame}[fragile]{Parallel programming is hard}
+
+\begin{itemize}
+\item Writing parallel programs by hand is hard and error-prone
+\item Nested data parallelism makes it easier for the programmer
+\item Compiling nested data parallelism efficiently is hard
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}[fragile]{Space complexity problem with NDP}
+Flattening can actually ruin a program's space complexity.
+
+Finding the furthest distance between any points.
+\begin{alltt}
+maxdist :: Vector Point -> Distance
+maxdist vs
+ = maximum
+ $ map maximum
+ $ map (\lam{v} map (distance v) vs) vs
+\end{alltt}
+
+Evaluating this na\"{i}vely, we end up with an $n^2$ array in memory:
+\begin{alltt}
+maxdist [p, q, r]
+==>
+maximum $ map maximum $
+[ [distance p p, distance p q, distance p r]
+, [distance q p, distance q q, distance q r]
+, [distance r p, distance r q, distance r r]]
+\end{alltt}
+
+\end{frame}
+
+\begin{frame}[fragile]{Fusion fixes space complexity}
+
+\begin{itemize}
+\item Fusion removes intermediate arrays
+\item The $n^2$ array is intermediate
+\item So it should be fused away
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}[fragile]{Short-cut fusion is fragile and relies on inlining}
+
+ Short-cut fusion:
+\begin{itemize}
+\item Existing fusion systems are fragile
+\item Rely on complicated compiler optimisations
+\item Not obvious when fusion will apply
+\end{itemize}
+Flow fusion:
+\begin{itemize}
+\item Flow fusion can fix more cases of space complexity
+\item Unknown whether \emph{all} cases
+\item Unlikely all cases
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}[fragile]{Plan}
+
+\begin{itemize}
+\item Which cases does flow fusion fix
+\item Compiler warnings for other cases
+\item Prove it
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}[fragile]{End}
+end.
+\end{frame}
+
+
+
+\end{document}

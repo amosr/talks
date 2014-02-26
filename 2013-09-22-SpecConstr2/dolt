@@ -1,0 +1,5 @@
+dot seeding.dot -oseeding.pdf -Tpdf
+dot seeding-1.dot -oseeding-1.pdf -Tpdf
+dot seeding-2.dot -oseeding-2.pdf -Tpdf
+dot seeding-3.dot -oseeding-3.pdf -Tpdf
+pdflatex sem.tex

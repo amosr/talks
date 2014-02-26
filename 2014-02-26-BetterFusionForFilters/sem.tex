@@ -1,0 +1,330 @@
+\documentclass{beamer}
+\usepackage{alltt}
+\usepackage{verbatim}
+\usepackage{graphicx}
+
+\usepackage{tikz}
+\usepackage{svg}
+
+\newcommand{\bs}{\symbol{`\\}}
+\newcommand{\arr}{$\rightarrow$}
+\newcommand{\LAMT}[1]{/\bs{}{#1} \arr }
+\newcommand{\lam}[1]{\bs{}{#1} \arr }
+\newcommand{\bl}[1]{\textcolor[rgb]{0.0,0.5,0.9}{#1}}
+\newcommand{\g}[1]{\textcolor[rgb]{0.7,0.3,0.3}{#1}}
+\newcommand{\off}[1]{\textcolor[rgb]{0.7,0.7,0.7}{#1}}
+
+\newcommand{\fr}[1]{\begin{frame}[fragile]{#1}}
+
+\begin{document}
+\title{Better fusion for filters}
+\author{Amos Robinson\\PhD student at UNSW}
+
+\frame{\titlepage}
+
+
+\fr{I want my programs to be fast}
+But I don't want to have to write this kind of rubbish.
+
+\begin{alltt}
+int  *\bl{out}    = malloc(\bl{in_len});
+int   \bl{out_ix} = 0;
+int   \bl{fold_m} = 0;
+int   \bl{in_ix}  = 0;
+
+\g{for} (; \bl{in_ix} != \bl{in_len}; ++\bl{in_ix}) \{
+  int \bl{elm} = \bl{in}[\bl{in_ix}] + 1;
+  \bl{fold_m}  = max(\bl{fold_m}, \bl{elm});
+  \g{if} (\bl{elm} > 0) \{
+      \bl{out}[\bl{out_ix}++] = \bl{elm};
+  \}
+\}
+
+*\bl{out_ptr} = \bl{out};
+*\bl{out_len} = \bl{out_ix};
+*\bl{fold_res}= \bl{fold_m};
+\end{alltt}
+
+\end{frame}
+
+
+
+\fr{Haskell is alright for expressing high-level programs}
+But the high-level version isn't necessarily the fastest.
+
+\begin{alltt}
+filterMax (\bl{vs} : Vector Int) =
+ let \bl{vs'} = \g{map}    (+1)    \bl{vs}
+     \bl{m}   = \g{fold}     0 max \bl{vs'}
+     \bl{vs''}= \g{filter} (>0)    \bl{vs'}
+ in (\bl{m}, \bl{vs''})
+\end{alltt}
+
+\end{frame}
+
+
+\fr{How many loops in this program?}
+About 3.
+
+\begin{alltt}
+filterMax (\bl{vs} : Vector Int) =
+ let \bl{vs'} = \g{map}    (+1)    \bl{vs}
+     \bl{m}   = \g{fold}     0 max \bl{vs'}
+     \bl{vs''}= \g{filter} (>0)    \bl{vs'}
+ in (\bl{m}, \bl{vs''})
+\end{alltt}
+
+\end{frame}
+
+
+\fr{So, we need to merge the loops together}
+\begin{itemize}
+\item
+This is called \emph{fusion}
+\item
+But we must be careful not to modify the program's behaviour
+\end{itemize}
+\end{frame}
+
+\fr{There are restrictions}
+Only loops of the same size can be fused
+\begin{alltt}
+different (\bl{as} \bl{bs} : Vector Int) =
+ let \bl{as'} = \g{map} (+1) \bl{as}
+     \bl{bs'} = \g{map} (-1) \bl{bs}
+ in (\bl{as'}, \bl{bs'})
+\end{alltt}
+No fusion here: \bl{\tt as} and \bl{\tt bs} may be different lengths.
+\end{frame}
+
+\fr{A fold can't be fused with its output}
+Because a fold consumes the entire input before producing anything.
+\begin{alltt}
+normalise (\bl{as} : Vector Int) =
+ let \bl{sum} = \g{fold} (+) 0  \bl{as}
+     \bl{as'} = \g{map}  (/\bl{sum}) \bl{as}
+ in  \bl{as'}
+\end{alltt}
+Two loops: \bl{\tt sum}; \bl{\tt as'}
+\end{frame}
+
+\fr{What of filters?}
+Can we fuse operations on filtered data with the original?
+
+\begin{alltt}
+sum2       (\bl{as} : Vector Int) =
+ let \bl{filt}  = \g{filter} (>0)  \bl{as}
+     \bl{s1}    = \g{fold}   (+) 0 \bl{filt}
+     \bl{s2}    = \g{fold}   (+) 0 \bl{as}
+
+
+ in (\bl{s1}, \bl{s2})
+\end{alltt}
+One loop: \bl{\tt filt s1 s2}
+\end{frame}
+
+
+\fr{What of filters?}
+% \begin{itemize}
+% \item
+% The output of a filter isn't the same size as its input
+% \item
+% But the \emph{loop} that produces the filtered result is the same size
+% \item
+% So the loop size of some operation on filtered data depends on the results of fusion!
+% \end{itemize}
+Only if they're in the generator loop
+
+\begin{alltt}
+normalise2 (\bl{as} : Vector Int) =
+ let \bl{filt}  = \g{filter} (>0)  \bl{as}
+     \bl{s1}    = \g{fold}   (+) 0 \bl{filt}
+     \bl{s2}    = \g{fold}   (+) 0 \bl{as}
+     \bl{filt'} = \g{map}    (/\bl{s1}) \bl{filt}
+     \bl{as'}   = \g{map}    (/\bl{s2}) \bl{as}
+ in (\bl{filt'}, \bl{as'})
+\end{alltt}
+Three loops: \bl{\tt filt s1 s2}; \bl{\tt filt'}; \bl{\tt as'}
+\end{frame}
+
+
+
+\fr{There may be multiple ways of fusing a program}
+How do we choose which one?
+\begin{alltt}
+multiple (\bl{us} : Vector Int) =
+ let \bl{xs} = \g{map}  (+1)  \bl{us}
+     \bl{y}  = \g{fold} (+) 0 \bl{us}
+     \bl{ys} = \g{map}  (+y)  \bl{xs}
+ in  \bl{ys}
+\end{alltt}
+\end{frame}
+
+
+\fr{Choice 1}
+3 loops, 2 manifest arrays
+\begin{alltt}
+multiple (\bl{us} : Vector Int) =
+ let \bl{xs}      = \g{loop #1: map  xs}
+     \bl{y}       = \g{loop #2: fold y}
+     \bl{ys}      = \g{loop #3: map  ys}
+ in  \bl{ys}
+\end{alltt}
+\end{frame}
+
+
+\fr{Choice 2}
+2 loops, 2 manifest arrays
+\begin{alltt}
+multiple (\bl{us} : Vector Int) =
+ let \bl{(xs, y)} = \g{loop #1: map  xs, fold y}
+     
+     \bl{ys}      = \g{loop #2: map  ys}
+ in  \bl{ys}
+\end{alltt}
+\end{frame}
+
+
+\fr{Choice 3 - ding!}
+2 loops, 1 manifest array
+\begin{alltt}
+multiple (\bl{us} : Vector Int) =
+ let \bl{y}       = \g{loop #1: fold y}
+     
+     \bl{ys}      = \g{loop #2: map  xs, map  ys}
+ in  \bl{ys}
+\end{alltt}
+\end{frame}
+
+
+\fr{My rough definition of `best' is}
+Minimise manifest arrays, then minimise number of loops.
+\end{frame}
+
+
+\fr{How do we do it?}
+Let us try on a simple program that has filters
+\begin{alltt}
+filt2 \bl{ins} =
+ let \bl{us} = \g{filter} p \bl{ins}
+     \bl{vs} = \g{filter} q \bl{ins}
+     \bl{ys} = \g{map}    f \bl{us}
+     \bl{zs} = \g{map}    g \bl{vs}
+ in (\bl{ys}, \bl{zs})
+\end{alltt}
+\end{frame}
+
+
+\fr{Size inference}
+Find out what we can about sizes of arrays
+\begin{alltt}
+filt2 \bl{ins} =            -- \bl{ins} : Vector \bl{k}  Int
+ let \bl{us} = \g{filter} p \bl{ins} -- \bl{us}  : Vector \bl{?u} Int, \bl{?u} <= \bl{k}
+     \bl{vs} = \g{filter} q \bl{ins} -- \bl{vs}  : Vector \bl{?v} Int, \bl{?v} <= \bl{k}
+     \bl{ys} = \g{map}    f \bl{us}  -- \bl{ys}  : Vector \bl{?u} Int
+     \bl{zs} = \g{map}    g \bl{vs}  -- \bl{zs}  : Vector \bl{?v} Int
+ in (\bl{ys}, \bl{zs})
+\end{alltt}
+\end{frame}
+
+
+\fr{Integer linear programming}
+Find a variable assignment that minimises the goal, satisfying constraints.
+\begin{alltt}
+Minimise   2x +  y
+Subject to  x +  y   >= 2
+            x + 2y   >= 4
+
+==>
+
+x = 0,
+y = 2
+\end{alltt}
+\end{frame}
+
+
+\fr{A variable for each pair of nodes}
+For each pair of distinct nodes \bl{i} and \bl{j}, we have:
+\begin{itemize}
+\item
+boolean variable \bl{\tt C(i,j)}, 0 if fused together
+\item
+constant weight \bl{\tt W(i,j)}, the benefit of fusion
+% - say, 100 if fusing \bl{i} and \bl{j} would remove a manifest array, 1 otherwise
+\end{itemize}
+
+\begin{alltt}
+Minimise   Sum \bl{W(i,j)} * \bl{C(i,j)}
+Subject to ...
+\end{alltt}
+\end{frame}
+
+\fr{Simple constraints}
+Not all nodes can be fused together, so we must add some constraints for this:
+\begin{itemize}
+\item
+\g{\tt fold}s cannot be fused with their outputs
+\item
+nodes of completely different sizes cannot be fused
+\end{itemize}
+
+\begin{alltt}
+Minimise   Sum \bl{W(i,j)} * \bl{C(i,j)}
+Subject to
+           \bl{C(i,j)} = 1 if \bl{i} is a \g{fold}
+           \bl{C(i,j)} = 1 if \bl{i} and \bl{j} are different sizes
+\end{alltt}
+\end{frame}
+
+
+\fr{Filter constraints}
+Operations on filtered data, despite having different sizes, \emph{may} sometimes be fused:
+
+\begin{alltt}
+filt2 \bl{ins} =
+ let \bl{us} = \g{filter} p \bl{ins}
+     \bl{vs} = \g{filter} q \bl{ins}
+     \bl{ys} = \g{map}    f \bl{us}
+     \bl{zs} = \g{map}    g \bl{vs}
+ in (\bl{ys}, \bl{zs})
+
+           \bl{C(us,ys)} = 1 ==> \bl{C(ys,zs)} = 1
+           \bl{C(vs,zs)} = 1 ==> \bl{C(ys,zs)} = 1
+           \bl{C(us,vs)} = 1 ==> \bl{C(ys,zs)} = 1
+\end{alltt}
+\end{frame}
+
+
+\fr{Acyclic constraint}
+The last thing we need is to ensure the clustering is acyclic; otherwise we'd need to execute two clusters at once.
+\begin{itemize}
+\item
+Give each node a number \bl{\tt pi(i)}
+\item
+If \bl{\tt C(i,j) = 0} then \bl{\tt pi(i) = pi(j)}
+\item
+If j is after i, \bl{\tt pi(i) < pi(j)}
+\end{itemize}
+
+\begin{alltt}
+           \bl{C(i,j)} <= \bl{pi(j)} - \bl{pi(i)} <= 100*\bl{C(i,j)}
+\end{alltt}
+\end{frame}
+
+
+\fr{Put it all together}
+
+\begin{alltt}
+Minimise   Sum \bl{W(i,j)} * \bl{C(i,j)}
+Subject to 
+           \bl{C(us,ys)} = 1 ==> \bl{C(ys,zs)} = 1
+           \bl{C(vs,zs)} = 1 ==> \bl{C(ys,zs)} = 1
+           \bl{C(us,vs)} = 1 ==> \bl{C(ys,zs)} = 1
+
+           \bl{C(us,ys)} <= \bl{pi(ys)} - \bl{pi(us)} <= 100*\bl{C(us,ys)}
+           \bl{C(vs,zs)} <= \bl{pi(zs)} - \bl{pi(vs)} <= 100*\bl{C(vs,zs)}
+\end{alltt}
+\end{frame}
+
+
+\end{document}
