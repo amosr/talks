@@ -149,6 +149,196 @@ Three loops: \bl{\tt filt s1 s2}; \bl{\tt filt'}; \bl{\tt as'}
 
 
 
+
+\fr{How do we do it?}
+Let's try to actually perform fusion on this program.
+\begin{alltt}
+normalise2 \bl{as} =
+ let \bl{filt}  = \g{filter} (>0)  \bl{as}
+     \bl{s1}    = \g{fold}   (+) 0 \bl{filt}
+     \bl{s2}    = \g{fold}   (+) 0 \bl{as}
+     \bl{filt'} = \g{map}    (/\bl{s1}) \bl{filt}
+     \bl{as'}   = \g{map}    (/\bl{s2}) \bl{as}
+ in (\bl{filt'}, \bl{as'})
+\end{alltt}
+\end{frame}
+
+
+% \fr{Size inference}
+% Find out what we can about sizes of arrays/loops
+% \begin{alltt}
+% normalise2 \bl{as} =                -- Len \bl{k}
+%  let \bl{filt}  = \g{filter} (>0)  \bl{as}   -- Len \bl{?f}, \bl{?f} <= \bl{k}
+%      \bl{s1}    = \g{fold}   (+) 0 \bl{filt} -- Len \bl{?f}
+%      \bl{s2}    = \g{fold}   (+) 0 \bl{as}   -- Len \bl{k}
+%      \bl{filt'} = \g{map}    (/\bl{s1}) \bl{filt} -- Len \bl{?f}
+%      \bl{as'}   = \g{map}    (/\bl{s2}) \bl{as}   -- Len \bl{k}
+%  in (\bl{filt'}, \bl{as'})
+% \end{alltt}
+% \end{frame}
+% 
+
+\fr{Integer linear programming}
+Find a variable assignment that minimises the goal, satisfying constraints.
+\begin{alltt}
+Minimise   2x +  y
+Subject to  x +  y   >= 2
+            x + 2y   >= 4
+
+==>
+
+x = 0,
+y = 2
+\end{alltt}
+\end{frame}
+
+
+\fr{A variable for each pair of nodes}
+For each pair of distinct nodes \bl{i} and \bl{j}, we have:
+\begin{itemize}
+\item
+boolean variable \bl{\tt C(i,j)}, 0 if fused together
+\item
+constant weight \bl{\tt W(i,j)}, the benefit of fusion
+% - say, 100 if fusing \bl{i} and \bl{j} would remove a manifest array, 1 otherwise
+\end{itemize}
+
+\begin{alltt}
+Minimise   Sum \bl{W(i,j)} * \bl{C(i,j)}
+Subject to ...
+\end{alltt}
+\end{frame}
+
+\fr{Fold constraints}
+\g{\tt fold}s cannot be fused with their outputs
+
+\begin{alltt}
+ let \bl{filt}  = \g{filter} (>0)  \bl{as}
+     \bl{s1}    = \g{fold}   (+) 0 \bl{filt}
+     \bl{s2}    = \g{fold}   (+) 0 \bl{as}
+     \bl{filt'} = \g{map}    (/\bl{s1}) \bl{filt}
+     \bl{as'}   = \g{map}    (/\bl{s2}) \bl{as}
+
+Minimise   Sum \bl{W(i,j)} * \bl{C(i,j)}
+Subject to
+           \bl{C(s1,filt')} = 1
+           \bl{C(s2,as')}   = 1
+\end{alltt}
+\end{frame}
+
+
+\fr{Filter constraints}
+Filtered data, despite having different sizes, \emph{may} be fused:
+
+\begin{alltt}
+ let \bl{filt}  = \g{filter} (>0)  \bl{as}
+     \bl{s1}    = \g{fold}   (+) 0 \bl{filt}
+     \bl{s2}    = \g{fold}   (+) 0 \bl{as}
+     \bl{filt'} = \g{map}    (/\bl{s1}) \bl{filt}
+     \bl{as'}   = \g{map}    (/\bl{s2}) \bl{as}
+
+Minimise   Sum \bl{W(i,j)} * \bl{C(i,j)}
+Subject to ...
+           \bl{C(filt,s1)}    = 1 ==> \bl{C(s1,s2)}     = 1
+           \bl{C(filt,s2)}    = 1 ==> \bl{C(s1,s2)}     = 1
+
+           \bl{C(filt,filt')} = 1 ==> \bl{C(filt',as')} = 1
+           \bl{C(filt,as')}   = 1 ==> \bl{C(filt',as')} = 1
+\end{alltt}
+\end{frame}
+
+
+\fr{Acyclic constraint}
+The last thing we need is to ensure the clustering is acyclic; otherwise we'd need to execute two clusters at once.
+\begin{itemize}
+\item
+Give each node a number \bl{\tt pi(i)}
+\item
+If \bl{\tt C(i,j) = 0} then \bl{\tt pi(i) = pi(j)}
+\item
+If j mentions i and \bl{\tt C(i,j) = 1} then \bl{\tt pi(i) < pi(j)}
+\item
+Otherwise, if j doesn't mention i then they can be anything
+\end{itemize}
+
+\end{frame}
+\fr{Acyclic constraint - ILP}
+\begin{alltt}
+PiMentions(i,j) =
+      \bl{C(i,j)} <= \bl{pi(j)} - \bl{pi(i)} <= 100*\bl{C(i,j)}
+
+PiNoMention(i,j)
+ -100*\bl{C(i,j)} <= \bl{pi(j)} - \bl{pi(i)} <= 100*\bl{C(i,j)}
+\end{alltt}
+\end{frame}
+
+
+\fr{Put it all together}
+
+\begin{alltt}
+Minimise   Sum \bl{W(i,j)} * \bl{C(i,j)}
+Subject to 
+     \bl{C(s1,filt')}   = 1
+     \bl{C(s2,as')}     = 1
+
+     \bl{C(filt,s1)}    = 1 ==> \bl{C(s1,s2)}     = 1
+     \bl{C(filt,s2)}    = 1 ==> \bl{C(s1,s2)}     = 1
+
+     \bl{C(filt,filt')} = 1 ==> \bl{C(filt',as')} = 1
+     \bl{C(filt,as')}   = 1 ==> \bl{C(filt',as')} = 1
+
+     PiMentions  (filt, s1)
+     PiNoMention (filt, s2)
+     PiMentions  (filt, filt')
+     PiNoMention (filt, as')
+     ...
+\end{alltt}
+\end{frame}
+
+\fr{Put it all together}
+
+\begin{alltt}
+Minimise   Sum \bl{W(i,j)} * \bl{C(i,j)}
+Subject to 
+     \bl{C(s1,filt')}   = 1
+     \bl{C(s2,as')}     = 1
+
+     \bl{C(filt,s1)}    = 1 ==> \bl{C(s1,s2)}     = 1
+     \bl{C(filt,s2)}    = 1 ==> \bl{C(s1,s2)}     = 1
+
+     \bl{C(filt,filt')} = 1 ==> \bl{C(filt',as')} = 1
+     \bl{C(filt,as')}   = 1 ==> \bl{C(filt',as')} = 1
+
+==>
+\bl{C(filt, s1)}    = 0
+\bl{C(filt, s2)}    = 0
+\bl{C(s1,   s2)}    = 0
+
+\bl{C(filt, s1)}    = 0
+\bl{C(filt, s2)}    = 0
+\bl{C(s1,   s2)}    = 0
+
+\end{alltt}
+\end{frame}
+
+
+\fr{prabob}
+\begin{center}
+\includegraphics[scale=0.3]{bob.png}
+\end{center}
+\end{frame}
+
+\fr{Definition of \bl{\tt W(i,j)}}
+Just a heuristic:
+\begin{alltt}
+W(i,j) = 100 if j mentions i
+             (then fusing them together means
+             i will be in cache when j is computed)
+
+W(i,j) = 1   otherwise, the only benefit is fewer loops
+\end{alltt}
+\end{frame}
+
 \fr{There may be multiple ways of fusing a program}
 How do we choose which one?
 \begin{alltt}
@@ -201,130 +391,8 @@ multiple (\bl{us} : Vector Int) =
 Minimise manifest arrays, then minimise number of loops.
 \end{frame}
 
-
-\fr{How do we do it?}
-Let us try on a simple program that has filters
-\begin{alltt}
-filt2 \bl{ins} =
- let \bl{us} = \g{filter} p \bl{ins}
-     \bl{vs} = \g{filter} q \bl{ins}
-     \bl{ys} = \g{map}    f \bl{us}
-     \bl{zs} = \g{map}    g \bl{vs}
- in (\bl{ys}, \bl{zs})
-\end{alltt}
+\fr{Fusion is NP-hard}
+See Alain Darte 1998 for a proof by reduction from vertex cover.
 \end{frame}
-
-
-\fr{Size inference}
-Find out what we can about sizes of arrays
-\begin{alltt}
-filt2 \bl{ins} =            -- \bl{ins} : Vector \bl{k}  Int
- let \bl{us} = \g{filter} p \bl{ins} -- \bl{us}  : Vector \bl{?u} Int, \bl{?u} <= \bl{k}
-     \bl{vs} = \g{filter} q \bl{ins} -- \bl{vs}  : Vector \bl{?v} Int, \bl{?v} <= \bl{k}
-     \bl{ys} = \g{map}    f \bl{us}  -- \bl{ys}  : Vector \bl{?u} Int
-     \bl{zs} = \g{map}    g \bl{vs}  -- \bl{zs}  : Vector \bl{?v} Int
- in (\bl{ys}, \bl{zs})
-\end{alltt}
-\end{frame}
-
-
-\fr{Integer linear programming}
-Find a variable assignment that minimises the goal, satisfying constraints.
-\begin{alltt}
-Minimise   2x +  y
-Subject to  x +  y   >= 2
-            x + 2y   >= 4
-
-==>
-
-x = 0,
-y = 2
-\end{alltt}
-\end{frame}
-
-
-\fr{A variable for each pair of nodes}
-For each pair of distinct nodes \bl{i} and \bl{j}, we have:
-\begin{itemize}
-\item
-boolean variable \bl{\tt C(i,j)}, 0 if fused together
-\item
-constant weight \bl{\tt W(i,j)}, the benefit of fusion
-% - say, 100 if fusing \bl{i} and \bl{j} would remove a manifest array, 1 otherwise
-\end{itemize}
-
-\begin{alltt}
-Minimise   Sum \bl{W(i,j)} * \bl{C(i,j)}
-Subject to ...
-\end{alltt}
-\end{frame}
-
-\fr{Simple constraints}
-Not all nodes can be fused together, so we must add some constraints for this:
-\begin{itemize}
-\item
-\g{\tt fold}s cannot be fused with their outputs
-\item
-nodes of completely different sizes cannot be fused
-\end{itemize}
-
-\begin{alltt}
-Minimise   Sum \bl{W(i,j)} * \bl{C(i,j)}
-Subject to
-           \bl{C(i,j)} = 1 if \bl{i} is a \g{fold}
-           \bl{C(i,j)} = 1 if \bl{i} and \bl{j} are different sizes
-\end{alltt}
-\end{frame}
-
-
-\fr{Filter constraints}
-Operations on filtered data, despite having different sizes, \emph{may} sometimes be fused:
-
-\begin{alltt}
-filt2 \bl{ins} =
- let \bl{us} = \g{filter} p \bl{ins}
-     \bl{vs} = \g{filter} q \bl{ins}
-     \bl{ys} = \g{map}    f \bl{us}
-     \bl{zs} = \g{map}    g \bl{vs}
- in (\bl{ys}, \bl{zs})
-
-           \bl{C(us,ys)} = 1 ==> \bl{C(ys,zs)} = 1
-           \bl{C(vs,zs)} = 1 ==> \bl{C(ys,zs)} = 1
-           \bl{C(us,vs)} = 1 ==> \bl{C(ys,zs)} = 1
-\end{alltt}
-\end{frame}
-
-
-\fr{Acyclic constraint}
-The last thing we need is to ensure the clustering is acyclic; otherwise we'd need to execute two clusters at once.
-\begin{itemize}
-\item
-Give each node a number \bl{\tt pi(i)}
-\item
-If \bl{\tt C(i,j) = 0} then \bl{\tt pi(i) = pi(j)}
-\item
-If j is after i, \bl{\tt pi(i) < pi(j)}
-\end{itemize}
-
-\begin{alltt}
-           \bl{C(i,j)} <= \bl{pi(j)} - \bl{pi(i)} <= 100*\bl{C(i,j)}
-\end{alltt}
-\end{frame}
-
-
-\fr{Put it all together}
-
-\begin{alltt}
-Minimise   Sum \bl{W(i,j)} * \bl{C(i,j)}
-Subject to 
-           \bl{C(us,ys)} = 1 ==> \bl{C(ys,zs)} = 1
-           \bl{C(vs,zs)} = 1 ==> \bl{C(ys,zs)} = 1
-           \bl{C(us,vs)} = 1 ==> \bl{C(ys,zs)} = 1
-
-           \bl{C(us,ys)} <= \bl{pi(ys)} - \bl{pi(us)} <= 100*\bl{C(us,ys)}
-           \bl{C(vs,zs)} <= \bl{pi(zs)} - \bl{pi(vs)} <= 100*\bl{C(vs,zs)}
-\end{alltt}
-\end{frame}
-
 
 \end{document}
