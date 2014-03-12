@@ -1,0 +1,16 @@
+#!/bin/bash
+for x in svg/*
+do
+    svg="$x"
+    out=${x#svg/}
+    out=${out%.svg}
+    out="gen/$out.png"
+    if [ $svg -nt $out ]
+    then
+        inkscape --export-png=$out $svg
+    fi
+done
+
+
+pdflatex sem.tex
+

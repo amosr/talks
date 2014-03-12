@@ -1,0 +1,415 @@
+\documentclass{beamer}
+\usepackage{alltt}
+\usepackage{verbatim}
+\usepackage{graphicx}
+
+\usepackage{tikz}
+\usepackage{svg}
+
+\newcommand{\bs}{\symbol{`\\}}
+\newcommand{\arr}{$\rightarrow$}
+\newcommand{\LAMT}[1]{/\bs{}{#1} ->}
+\newcommand{\lam}[1]{\bs{}{#1} ->}
+\newcommand{\bl}[1]{\textcolor[rgb]{0.0,0.5,0.9}{#1}}
+\newcommand{\g}[1]{\textcolor[rgb]{0.7,0.3,0.3}{#1}}
+\newcommand{\off}[1]{\textcolor[rgb]{0.7,0.7,0.7}{#1}}
+
+\newcommand{\fr}[1]{\begin{frame}[fragile]{#1}}
+\newcommand{\im}[1]{\includegraphics[scale=0.3]{gen/#1.png} \\ }
+
+\begin{document}
+\title{Annual progress review\\Fixing Data Parallel Haskell's space complexity}
+\author{Amos Robinson}
+
+\frame{\titlepage}
+
+\fr{Closest points}
+\im{01-points}
+Given an array of points, how do we find the two closest ones?
+\end{frame}
+
+\fr{Closest points}
+\im{02-pointsnsquared}
+Choose a random point
+\end{frame}
+
+\fr{Closest points}
+\im{03-split}
+Split into two groups - left of point, right of point
+\end{frame}
+
+\fr{Closest points}
+\im{04-lefts}
+Let's look at the left group first
+\end{frame}
+
+\fr{Closest points}
+\im{05-leftsolve}
+There are only 3 points, so just look at them all ($n^2$)
+\end{frame}
+
+\fr{Closest points}
+\im{06-right}
+Look at the right set now. There are 7, including the split point.
+\end{frame}
+
+\fr{Closest points}
+\im{07-rsplit}
+Choose another random point and perform another split
+\end{frame}
+
+\fr{Closest points}
+\im{08-rleft}
+Only 2, so do $n^2$
+\end{frame}
+
+\fr{Closest points}
+\im{09-rright}
+Only 5, so do $n^2$
+\end{frame}
+
+\fr{Closest points}
+\im{10-rjoin}
+We're merging two sets, but we only need to look at the borders
+\end{frame}
+
+\fr{Closest points}
+\im{11-rjoin2}
+There are no points near the border on the left
+\end{frame}
+
+\fr{Closest points}
+\im{12-join}
+Check points near the border
+\end{frame}
+
+\fr{Closest points}
+\im{13-join2}
+And we have found the two closest points
+\end{frame}
+
+
+\fr{How can we parallelise this?}
+Simple - fork off a new thread for each branch
+\begin{itemize}
+\item
+Fork a certain number under a threshold - \emph{unbalanced!}
+\item
+Dynamic scheduling - \emph{runtime communications overheads!}
+\end{itemize}
+\end{frame}
+
+
+\fr{Nested data parallelism}
+Nested data parallelism lets us do this in a balanced way,
+by collecting computations into larger chunks, and running in parallel.
+\end{frame}
+
+\fr{Nested data parallelism}
+\im{ndp-01}
+Given the array of points
+\end{frame}
+
+\fr{Nested data parallelism}
+\im{ndp-02}
+Select a random point
+\end{frame}
+
+\fr{Nested data parallelism}
+\im{ndp-03}
+Reorder - put those to the left before those to the right (parallel)
+\end{frame}
+
+\fr{Nested data parallelism}
+\im{ndp-04}
+Another random point and reorder (parallel)
+\end{frame}
+
+\fr{Nested data parallelism}
+\im{ndp-05}
+Perform small ones in parallel
+\end{frame}
+
+\fr{Nested data parallelism}
+\im{ndp-06}
+Merge upwards (parallel)
+\end{frame}
+
+\fr{Nested data parallelism}
+\im{ndp-07}
+Merge upwards (parallel)
+\end{frame}
+
+
+
+
+% \fr{Data Parallel Haskell}
+% The guts of closest points: (TODO add colours)
+% \begin{alltt}
+% closest :: [:Point:] -> (Point,Point)
+% closest pts
+%  | length pts < 250 = closestNaive pts
+%  | otherwise        
+%  = let mid          = randomx pts
+%        lefts        = filter  (\lam{(x,y)} x >= mid) pts
+%        rights       = filter  (\lam{(x,y)} x <  mid) pts
+%        left         = closest lefts
+%        right        = closest rights
+%    in  merge mid lefts rights (minPair left right)
+% \end{alltt}
+% \end{frame}
+% 
+% 
+% \fr{Space flaw}
+% However, there is a problem.
+% \begin{alltt}
+% merge :: [:Point:]     -> [:Point:]
+%       -> (Point,Point) -> (Point,Point)
+% merge lefts rights minpts
+%  = let ls = nearBoundary minpts lefts
+%        rs = nearBoundary minpts rights
+%    in fold minPair minpts
+%     [: (l,r) | l <- ls, r <- rs :]
+% \end{alltt}
+% \end{frame}
+
+\fr{Sequential merging}
+When we are merging some boundary points sequentially,
+we allocate several small arrays in sequence
+\end{frame}
+
+\fr{Sequential merging}
+\im{merge-01}
+\begin{alltt}
+[ dist 1 4, dist 1 5, dist 1 6 ]
+\end{alltt}
+\end{frame}
+
+\fr{Sequential merging}
+\im{merge-02}
+\begin{alltt}
+[ dist 2 4, dist 2 5, dist 2 6 ]
+\end{alltt}
+\end{frame}
+
+\fr{Sequential merging}
+\im{merge-03}
+\begin{alltt}
+[ dist 3 4, dist 3 5, dist 3 6 ]
+\end{alltt}
+\end{frame}
+
+
+\fr{Parallel merging}
+\im{merge-par}
+However, to perform it in parallel, we allocate \emph{all} arrays at once
+\begin{alltt}
+[ [dist 1 4, dist 1 5, dist 1 6]
+, [dist 2 4, dist 2 5, dist 2 6]
+, [dist 3 4, dist 3 5, dist 3 6] ]
+\end{alltt}
+\end{frame}
+
+\fr{How do we fix this?}
+Array fusion can remove arrays!
+\end{frame}
+
+\fr{DPH already has fusion}
+Stream fusion:
+\begin{itemize}
+\item
+But it relies on compiler heuristics, and is not predictable
+\item
+Nor is it optimal
+\end{itemize}
+\end{frame}
+
+\fr{Stream fusion}
+For this example, stream fusion requires three loops instead of one
+\begin{columns}
+\column{6cm}
+\begin{alltt}
+filterMax (\bl{vs} : Vector Int) =
+ let \bl{vs'} = \g{map}    (+1)    \bl{vs}
+     \bl{m}   = \g{fold}     0 max \bl{vs'}
+     \bl{vs''}= \g{filter} (>0)    \bl{vs'}
+ in (\bl{m}, \bl{vs''})
+\end{alltt}
+\column{4cm}
+\end{columns}
+\end{frame}
+
+\fr{Stream fusion is insufficient}
+We want a more `principled' approach, with strong guarantees about what will be fused
+\end{frame}
+
+\fr{My work}
+\begin{center}
+\LARGE
+My Work
+\end{center}
+\end{frame}
+
+\fr{My work - outline}
+\im{mywork-outline}
+\end{frame}
+
+
+\fr{Flow fusion}
+So, we implemented `flow fusion'
+\begin{itemize}
+\item
+Combinator-based
+\item
+Given a set of combinators, \emph{if} they can be fused into a single loop, they \emph{will}
+\item
+And we wrote a paper for Haskell Symposium '13: Data flow fusion with series expressions in Haskell
+\end{itemize}
+
+\end{frame}
+
+\fr{Flow fusion - example}
+\begin{columns}
+\column{6cm}
+\begin{alltt}
+filterMax (\bl{vs} : Vector Int) =
+ let \bl{vs'} = \g{map}    (+1)    \bl{vs}
+     \bl{m}   = \g{fold}     0 max \bl{vs'}
+     \bl{vs''}= \g{filter} (>0)    \bl{vs'}
+ in (\bl{m}, \bl{vs''})
+\end{alltt}
+\column{5cm}
+\im{filterMax-unfused}
+\end{columns}
+This becomes a single imperative loop.
+\end{frame}
+
+\fr{Clustering}
+Given a set of combinators, partition into as few clusters as possible
+\begin{itemize}
+\item
+This is standard fusion
+\item
+Lots of literature on this for imperative programs
+\item
+Except we also have interesting combinators like \emph{filter}
+\end{itemize}
+\end{frame}
+
+
+\fr{Clustering - multiple solutions}
+\begin{itemize}
+\item
+There are \emph{many} possible clusterings for a given graph
+\item
+We want to find the \emph{best}
+\item
+NP-hard, but the problems are relatively small
+\item
+Integer linear programming!
+\end{itemize}
+\end{frame}
+
+
+
+
+\fr{Clustering - example}
+\begin{columns}
+\column{6cm}
+\begin{alltt}\small
+normalise2 (\bl{as} : Vector Int) =
+ let \bl{filt}  = \g{filter} (>0)  \bl{as}
+     \bl{s1}    = \g{fold}   (+) 0 \bl{filt}
+     \bl{s2}    = \g{fold}   (+) 0 \bl{as}
+     \bl{filt'} = \g{map}    (/\bl{s1}) \bl{filt}
+     \bl{as'}   = \g{map}    (/\bl{s2}) \bl{as}
+ in (\bl{filt'}, \bl{as'})
+\end{alltt}
+
+\column{5cm}
+\im{normalise2-unfused}
+\end{columns}
+\end{frame}
+
+
+\fr{Clustering - example}
+\begin{center}
+\im{normalise2-f1}
+\end{center}
+We can fuse these.
+\end{frame}
+
+\fr{Clustering - example}
+\begin{center}
+\im{normalise2-f2}
+\end{center}
+No fusion between \emph{filter} and \emph{map}, because the \emph{fold} is in the way.
+\end{frame}
+
+\fr{Clustering - example}
+\begin{center}
+\im{normalise2-f3}
+\end{center}
+We can fuse these, despite being different colours.
+\end{frame}
+
+\fr{Clustering - example}
+\begin{center}
+\im{normalise2-f4}
+\end{center}
+We \emph{can't} fuse these, as they have different sized inputs
+\end{frame}
+
+\fr{Clustering - current status}
+\begin{itemize}
+\item
+Have implemented prototype ILP formulation
+\item
+Some optimisations to algorithm are possible
+\item
+Prove correctness
+\item
+Implement real version and integrate into GHC
+\end{itemize}
+\end{frame}
+
+\fr{Extra combinators}
+\begin{itemize}
+\item
+Current version only supports certain combinators
+\\
+\emph{map, filter, fold, gather}
+\item
+Data Parallel Haskell requires many more
+\\
+\emph{generate, concat, scan, segmented map, segmented filter,\ldots}
+\item
+But I know the general idea now
+\end{itemize}
+\end{frame}
+
+
+\fr{Summary - the problem}
+Nested data parallelism can expose too much parallelism, leading to space complexity problems.
+\\
+Fusing loops removes the large arrays, but the current fusion system is sub-optimal and unpredictable.
+\\
+We need a fusion system with strong guarantees about which arrays will be fused away.
+\end{frame}
+
+\fr{Summary - progress}
+What have I done this year?
+\begin{itemize}
+\item
+Fixed memory and termination problems with SpecConstr optimisation in GHC
+\item
+Flow fusion Haskell Symposium paper
+\item
+Implemented ILP formulation for clustering
+\end{itemize}
+
+
+\end{frame}
+
+
+\end{document}
