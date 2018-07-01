@@ -1,0 +1,2 @@
+termination Replicate.replicate { measure (BinInt.Z.to_nat num) }
+obligations Replicate.replicate termination_Z_to_nat

@@ -1,0 +1,3 @@
+CFML: "characteristic formulas"; neither deep nor shallow embedding, but looks closer to deep.
+axiomatic construction of eval function
+but supports mutability and arbitrary recursion
