@@ -1,0 +1,62 @@
+# Pipit
+
+This is work I did as a postdoc at the ANU. I now work at AMD proving GPUs.
+
+Pipit is a language for implementing and verifying reactive systems.
+
+We are particularly interested in verifying safety-critical reactive systems, where the severity of a system error is particularly bad.
+For these kinds of safety-critical systems, we need an engineering process to give us confidence that the implementation is correct.
+
+One engineering process that is particularly effective is to implement our system in a high-level synchronous language such as Lustre or Scade.
+We then generate executable code that runs in real-time, which reduces the risk of memory safety bugs.
+Importantly, though, we can use a model checker or automated theorem prover to prove that our implementation satisfies certain safety properties.
+This engineering process works well, but it places a lot of trust in the toolchain -- the compiler and the model checker.
+
+For example, consider this Lustre program that does a "safe division".
+It takes three inputs, the numerator, denominator, and a default value.
+If the denominator is zero, then it returns the default value, otherwise it returns the numerator divided by the denominator.
+
+We also state a property that if the denominator is zero, then the result is the default value, and we can verify this property with a model checker such as Kind2.
+
+However, if we compile this with a compiler such as Vélus or Heptagon, then the resulting code will give a runtime error.
+The concrete issue here is that the model checker defines division-by-zero to return an arbitrary integer, while the compiler-generated code defines division-by-zero as an error.
+The high-level issue, though, is that the model checker's semantics of Lustre programs doesn't exactly match the compiler's semantics.
+
+The goal of Pipit, then, is to provide a verified and trustworthy toolchain for executing and verifying these kinds of programs.
+Pipit has verified translation to abstract transition systems for reasoning about them, and verified translation to executable for real-time execution.
+We have two main properties:
+* compilation is correct, in that the executable is a refinement of the original program, which is in turn a refinement of the abstract system; and
+* it's a sound proof system, in that anything we verify on the abstract system holds on the executable system.
+These two properties are very similar, but there's a subtle distinction on the right about what the properties that we verify really mean.
+
+In reality, we've only verified the core language so far. Users write in a source language, which is embedded in F*, and we have an unverified translation to core Pipit.
+From core Pipit, we have a verified translation to abstract transition systems, with a sound proof system.
+Going down, we translate to executable transition systems, which is verified to be an equivalence, so it's stronger than a refinement.
+We then translate to Low*, which is a subset of F* for which we can extract C code.
+The extraction from Low* is external to Pipit and hasn't been mechanically verified.
+
+Now that we've seen the high-level story, let's look at a concrete Pipit program.
+This program implements a counter that increments whenever a flag is set.
+It takes a maximum to count up to, as well as a stream of flags denoting whether to increment, and returns a stream of counts.
+The function defines a group of mutually recursive streams for the previous count, the incremented count, and the count itself.
+The previous count is defined using the "0 followed by count" syntax, which says that at each point in time, it takes the previous value of the count stream, and at the very first step when there is no previous value, it uses the default value of zero.
+The incremented count takes the previous count and increments it if the flag is set.
+The count itself performs the saturation so that the result doesn't overflow.
+
+If we wanted to verify this as part of a larger program, we might want to show that the count never exceeds the maximum.
+We can do this with a rely-guarantee contract like this one, which states that the count is always below the maximum.
+Rely-guarantee contracts are good for abstracting away implementation details, as once we prove that the body satisfies this contract, consumers only need to reason about the contract itself. 
+However, in this case, consumers probably need more information about the count itself.
+
+We could add more properties to the contract, such as that the count is nondecreasing, and if the increment flag is false the count remains the same, and so on.
+But this is essentially just re-stating the details of the implementation on the contract, which is tedious and removes the benefits of abstraction.
+For a fundamental function like count_when, there isn't too much that we can really abstract.
+This tedious duplication is why I don't think contracts or a pre/post-style program logic is suitable **on its own** for Lustre-style programs.
+
+To resolve this, Pipit also supports inline assertions.
+Once we prove the assertion true here, the consumer can prove a larger program, using the details of count_when and re-using the proof of the assertion.
+
+Existing model-checkers for Lustre do support both contracts and inline assertions.
+The key contribution here is that we have a sound and mechanised metatheory for them, and this lets us combine automated proofs with interactive proofs together in one system.
+This combination is especially useful for larger systems where automated proofs fail.
+
